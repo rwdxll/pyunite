@@ -1,0 +1,7 @@
+*.pyc
+*~
+*.swp
+lint.html
+dist/
+tags
+.idea/
