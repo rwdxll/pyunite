@@ -1,2 +1,2 @@
 ### PyUnite
-Python port of the popular Unite Vim plugin
+Python port of https://github.com/Shougo/unite.vim
