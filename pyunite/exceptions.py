@@ -1,6 +1,10 @@
-class UniteException(Exception):
+class PyUniteException(Exception):
     pass
 
 
-class UnrecognizedOption(UniteException):
+class UnrecognizedOption(PyUniteException):
+    pass
+
+
+class UnrecognizedSource(PyUniteException):
     pass
