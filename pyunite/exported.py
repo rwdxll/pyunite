@@ -1,4 +1,5 @@
 import vim
+from uuid import uuid4 as uniqueid
 from copy import deepcopy
 import funcy as fn
 from itertools import imap
@@ -7,7 +8,6 @@ from operator import itemgetter as get
 from . import defaults
 from .decorators import export
 from .helpers import *
-from .exceptions import PyUniteException
 
 
 @export()
@@ -41,66 +41,85 @@ handlers = dict(
 )
 
 
-def set_buffer_autocommands(buffer):
+def set_buffer_autocommands(buf):
     vim.command('augroup plugin-pyunite')
-    vim.command('autocmd! * <buffer=' + str(buffer.number) + '>')
+    vim.command('autocmd! * <buffer=' + str(buf.number) + '>')
     for event, handler in handlers:
-        vim.command('autocmd ' + event + ' <buffer=' + str(buffer.number) + '> call s:' + handler.func_name + '()')
+        vim.command('autocmd ' + event + ' <buffer=' + str(buf.number) + '> call s:' + handler.func_name + '()')
     vim.command('augroup END')
 
 
-def set_buffer_mappings(buffer):
+def set_buffer_mappings(buf):
     pass
 
 
 def set_window_options(window):
-    options = window.options
     if vhas('cursorbind'):
-        options['cursorbind'] = False
+        window.options['cursorbind'] = False
     if vhas('conceal'):
-        options['conceallevel'] = 3
-        options['concealcursor'] = 'niv'
+        window.options['conceallevel'] = 3
+        window.options['concealcursor'] = 'niv'
     if vexists('+cursorcolumn'):
-        options['cursorcolumn'] = False
+        window.options['cursorcolumn'] = False
     if vexists('+colorcolumn'):
-        options['colorcolumn'] = 0
+        window.options['colorcolumn'] = ''
     if vexists('+relativenumber'):
-        options['relativenumber'] = False
-    options['cursorline'] = False
-    options['foldcolumn'] = 0
-    options['foldenable'] = False
-    options['list'] = False
-    options['number'] = False
-    options['scrollbind'] = False
-    options['spell'] = False
+        window.options['relativenumber'] = False
+    window.options['cursorline'] = False
+    window.options['foldcolumn'] = 0
+    window.options['foldenable'] = False
+    window.options['list'] = False
+    window.options['number'] = False
+    window.options['scrollbind'] = False
+    window.options['spell'] = False
 
 
-def set_buffer_options(buffer):
-    buffer.options['bufhidden'] = 'wipe'
-    buffer.options['buflisted'] = True
-    buffer.options['buftype'] = 'nofile'
-    buffer.options['completefunc'] = ''
-    buffer.options['omnifunc'] = ''
-    buffer.options['iskeyword'] += ',-,+,\\,!,~'
-    buffer.options['matchpairs'] = re.sub('<:>,', '', buffer.options['matchpairs'])
-    buffer.options['modeline'] = False
-    buffer.options['modifiable'] = False
-    buffer.options['readonly'] = False
-    buffer.options['swapfile'] = False
-    buffer.options['filetype'] = 'pyunite'
+def set_buffer_options(buf):
+    buf.options['bufhidden'] = 'wipe'
+    buf.options['buflisted'] = True
+    buf.options['buftype'] = 'nofile'
+    buf.options['completefunc'] = ''
+    buf.options['omnifunc'] = ''
+    buf.options['iskeyword'] += ',-,+,\\,!,~'
+    buf.options['matchpairs'] = re.sub('<:>,', '', buf.options['matchpairs'])
+    buf.options['modeline'] = False
+    buf.options['modifiable'] = False
+    buf.options['readonly'] = False
+    buf.options['swapfile'] = False
+    buf.options['filetype'] = 'pyunite'
+
+
+def set_buffer_state(state, buf):
+    # Vim uses garbage collection, so replacing the previous state is fine
+    buf.vars['pyunite_state'] = state
+
+
+def set_buffer_contents(state, buf):
+    with scoped(buf.options, modifiable=True):
+        buf[:] = None
+        content = fn.flatten(imap(formatted_candidates, state['sources']))
+        buf.append(content, 0)
 
 
 def make_pyunite_buffer(state):
-    '''
-    The current buffer is not changed in any way. This is done on purpose.
-    '''
-    buffer = make_buffer('pyunite[{}:{}]'.format(state['scope'], state['tabpage_or_window_number']))
-    set_buffer_options(buffer)
-    set_buffer_autocommands(buffer)
-    set_buffer_mappings(buffer)
-    # Vim uses garbage collection, so replacing the previous state is fine
-    buffer.vars['pyunite_state'] = state
-    return buffer
+    buf = make_buffer('pyunite:{}'.format(state['uid'][:7]))
+    set_buffer_options(buf)
+    set_buffer_autocommands(buf)
+    set_buffer_mappings(buf)
+    set_buffer_state(state, buf)
+    set_buffer_contents(state, buf)
+    return buf
+
+
+def make_pyunite_window(state, buf):
+    window = make_window(
+        direction = state['direction'],
+        size = state['size'],
+        vsplit = state['vsplit'],
+        buffer_name = buf.name,
+    )
+    set_window_options(window)
+    return window
 
 
 def populate_candidates(source):
@@ -119,41 +138,25 @@ def formatted_source_names(sources):
     return imap(formatted_source_name, sources)
 
 
-def set_buffer_contents(buffer, lines):
-    buffer[:] = None
-    buffer.append(lines, 0)
+def sources_names(state):
+    return map(get('name'), state['sources'])
 
 
-# The lambdas are here so that every time they are invoked the value os
-# vim.current.* is actually current
-scope_to_current = {
-    'tabpage': lambda: vim.current.tabpage,
-    'window': lambda: vim.current.window,
-}
+def get_state(buf):
+    return buf.vars['pyunite_state']
 
 
-def buffer_is_reusable(state, buffer):
-    # Obviously, we only reuse PyUnite's buffers
-    if not is_pyunite_buffer(buffer):
-        return False
-
-    bufstate = buffer.vars['pyunite_state']
-
-    # Only reuse buffers which have the same scope as the new state
-    if bufstate['scope'] != state['scope']:
-        return False
-
-    # If the scopes are 'global' then we can reuse this buffer
-    if bufstate['scope'] == state['scope'] == 'global':
-        return True
-
-    # Only reuse buffers which are either in the same tabpage or window
-    # (depending on the scope)
-    if bufstate['tabpage_or_window_number'] == scope_to_current[state['scope']]().number:
-        return True
-
-    return False
-
+def find_pyunite_buffer(state):
+    choosable = lambda x: is_pyunite_buffer(x) and state['scope'] == get_state(x)['scope']
+    for buf in ifilter(choosable, vim.buffers):
+        if sources_names(state) == sources_names(get_state(buf)):
+            return buf
+        if get_state(buf)['reusable']:
+            set_buffer_state(state, buf)
+            set_buffer_contents(state, buf)
+            return buf
+    return None
+        
 
 def start_unite(state):
     '''
@@ -162,21 +165,15 @@ def start_unite(state):
     Args:
         state (dict): Must be deepcopied to prevent modification of default state
     '''
-    sources = state['sources']
-    state['tabpage_or_window_number'] = scope_to_current[state['scope']]().number
+    # TODO: Find better way of validating input
+    assert state['scope'] in ['global', 'tab', 'window']
+    assert state['direction'] in ['topleft', 'botright', 'leftabove', 'rightbelow']
 
-    map(populate_candidates, sources)
-    buffer = find(partial(buffer_is_reusable, state), vim.buffers) or make_pyunite_buffer(state)
-    with scoped(buffer.options, modifiable=True):
-        set_buffer_contents(buffer, fn.flatten(imap(formatted_candidates, sources)))
+    state['uid'] = str(uniqueid())
 
-    window = window_with_buffer(buffer)
-    # Later on we can refine this process (resize the window instead of
-    # closing it, etc...)
-    if window:
-        close_window(window)
-    print vim.eval('histget(":")')
-    make_window(buffer)
+    map(populate_candidates, state['sources'])
+    buf = find_pyunite_buffer(state) or make_pyunite_buffer(state)
+    window = window_with_buffer(buf) or make_pyunite_window(state, buf)
 
 
 def formatted_option(option):

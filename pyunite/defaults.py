@@ -3,54 +3,47 @@ import funcy as fn
 
 
 # Options and their default values
+# 
+# Notice that 'bufhidden' is set to 'wipe' by default. This means that all
+# PyUnite buffers are guaranteed to be displayed in at least one window.
 options = dict(
-    # TODO: Redo this documentation
     # Scope of PyUnite's state. Possible values are:
     #
-    #   global          Global. The quickfix list behaves like this.
-    #   tabpage         PyUnite buffers in the same tab (as given by
-    #   window          Local to window. The location list behaves like this.
+    #   global          One PyUnite buffer maintained globally. The quickfix
+    #                   list behaves like this.
+    #   tabpage         One PyUnite buffer maintained per tab.
+    #   window          One PyUnite buffer maintained per window.
     #
-    # For example if the scope is 'tabpage', and a PyUnite window is opened,
-    # it will create a state with tab scope (t:). This means that PyUnites in
-    # other tabs will be unaffected.
-    scope = 'tabpage',
-    # Should the window be split vertically?
-    vsplit = False,
+    # Notice that there could actually be more than one PyUnite buffer
+    # per scope if other PyUnite buffers in the same scope are marked as
+    # 'reusable'.
+    scope = 'tab',
     # Should focus be switched from current window to PyUnite window?
     focus_on_open = True,
-    # Should the current window be used for rendering or should a new window
-    # be created? Notice that in order to control the window layout you can
-    # always use the usual suspects (:vert, :botright, :split, etc...)
-    reuse_window = False,
+    # When another PyUnite buffer is being opened in the same scope, should
+    # this buffer be reused?
+    reusable = True,
     # Should the PyUnite window be closed after performing an action on a
     # candidate?
     quit_after_action = False,
+    # Height if horizontal split. Width if vertical split. Zero means don't
+    # resize the window.
+    size = 0,
+    # Type of split and direction. This will let us know how the PyUnite
+    # window was opened.
+    vsplit = False,
+    direction = 'leftabove',
 )
 
 # This state dictionary contains all the information ever needed to render a
 # PyUnite window. States are buffer-local to PyUnite buffers.
 state = fn.merge(options, dict(
-    # ID identifying this state. No two states should ever have the same ID.
-    # When a new PyUnite command is executed, an ID for the new state is
-    # calculated and a PyUnite buffer with the same ID is reused if available.
-    # The ID itself is calculated as a sha256 hash of the concatenation of
-    # several fields:
-    #   
-    #   - This state's scope
-    #   - 
+    # Random string uniquely identifying a PyUnite's buffer.
     #
-    state_id = '',
-    # Well, height and width of the window. What else can I say? The one used
-    # depends on various factors (is the new window a vertical/horizontal
-    # split?, etc...)
-    # The default value is taken from the quickfix window's default height.
-    # A -1 means do not set the height, which will effectively split the
-    # current buffer horizontally in half.
-    height = 10,
-    # A -1 means do not set the width, which will effectively split the
-    # current buffer vertically in half
-    width = -1,
+    # Whenever a PyUnite buffer is created, a variable in the PyBuffer
+    # container's namespace (g:, t: or w:) is set which is equal to this
+    # field. That way we can pair a PyUnite's buffer with its container.
+    uid = '',
     sources = {},
 ))
 
