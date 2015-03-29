@@ -2,7 +2,7 @@ import vim
 import re
 import funcy as fn
 
-from ..helpers import command_output
+from ..core import command_output
 
 
 def gather_candidates():
