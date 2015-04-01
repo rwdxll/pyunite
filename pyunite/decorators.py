@@ -2,7 +2,7 @@ import vim
 import random
 import wrapt
 from functools import wraps
-from operator import methodcaller as call
+from funcy import autocurry
 
 
 functions = {}

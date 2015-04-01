@@ -4,6 +4,7 @@ import funcy as fn
 from itertools import ifilter
 
 from ..core import command_output, icompact
+from ..actions import directory_actions
 from ..variables import candidate
 
 
@@ -15,7 +16,11 @@ def get_candidates(*args):
     return map(lambda x: to_candidate(re.split('"(.*)"', x)), lines)
 
 
-def get_actionable_part(candidate):
+actions = directory_actions
+default_action = actions['window_open']
+
+
+def actionable_string(action, candidate):
     return candidate.filterable
 
 

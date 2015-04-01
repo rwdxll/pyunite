@@ -3,6 +3,7 @@ import funcy as fn
 from itertools import imap
 
 from ..core import command_output, icompact
+from ..actions import common_actions
 from ..variables import candidate
 
 
@@ -11,7 +12,11 @@ def get_candidates(*args):
     return map(lambda x: candidate._replace(filterable=x), lines)
 
 
-def get_actionable_part(candidate):
+actions = common_actions
+default_action = actions['nop']
+
+
+def actionable_string(action, candidate):
     return candidate.filterable
 
 

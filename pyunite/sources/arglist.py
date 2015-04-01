@@ -3,6 +3,7 @@ import re
 import funcy as fn
 
 from ..core import command_output, icompact
+from ..actions import directory_actions
 from ..variables import candidate
 
 
@@ -11,7 +12,11 @@ def get_candidates(*args):
     return map(lambda x: candidate._replace(filterable=x), lines)
 
 
-def get_actionable_part(candidate):
+actions = directory_actions
+default_action = actions['window_open']
+
+
+def actionable_string(action, candidate):
     return candidate.filterable
 
 
