@@ -5,7 +5,7 @@ import funcy as fn
 # Notice that 'bufhidden' is set to 'wipe' by default. This means that all
 # PyUnite buffers are guaranteed to be displayed in at least one window.
 
-# Internal maintained list of currently active PyUnite states.
+# Internally maintained list of currently active PyUnite states.
 states = []
 
 # Options can be specified in the PyUnite command line. They are merged into a
@@ -43,8 +43,6 @@ default_options = dict(
     # Other options
     #
 
-    # Close buffer upon exiting Vim
-    ephemeral = True,
     # Don't open window when there are no candidates
     close_on_empty = False,
     # Steal focus from current window

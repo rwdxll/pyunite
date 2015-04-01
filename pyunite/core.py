@@ -15,6 +15,52 @@ from . import variables, sources
 from .decorators import export
 
 
+# ideas ----------------
+#
+# directory with:
+#   doc.txt
+#   <source_name>.py
+#       - get_candidates()
+#       - actions dictionary. (provide default dictionaries for common groups
+#       of actions)
+#       - default action
+#       - description
+#
+# generic function to set syntax/highlight (with keyword arguments)
+#
+#  add_syntax = partial(add_syntax, 'output')
+#
+#  add_syntax('alex1', '^.*$', nextgroup='alex2')
+#  add_syntax('alex2', '[a-z]', nextgroup='alex3')
+#  add_syntax('alex3', 'w[or]d', nextgroup='alex4')
+#
+#  add_highlight('alex1', 'Comment')
+#  add_highlight('alex2', 'Blah')
+#
+# to allow for custom arguments... maybe have some preprocessor logic going on
+# at the command line? For example if we want to define a mapping for output:
+#
+#  nnoremap <leader>o PyUniteStart output:ls<CR>
+#
+# But then we would have to define a new mapping for every command. Another
+# option is how Unite does it: it has custom code that prompts the user for
+# the input depending on the source. <--- Uggghhh!!
+# How about we get awesome and allow preprocessing directives a la Jinja for
+# example:
+#   
+#   nnoremap <leader>o PyUniteStart output:{%Vim Command: %}
+#
+# Then PyUnite will automatically prompt the user and the user's input will
+# become an argument for the source. All the other arguments will get parsed
+# too, so in the following case:
+#
+#   nnoremap <leader>o PyUniteStart output:{%Vim Command: %}:other_opt
+#   >> Vim Command: ls
+#
+# The args would be ['ls', 'other_opt']. Voila... flexible arguments I'm
+# calling it.
+
+
 class PyUniteException(Exception):
     pass
 
@@ -40,7 +86,7 @@ def close(cmdline):
 
 
 @export()
-def complete_options(arglead, cmdline, cursorpos):
+def complete_cmdline(arglead, cmdline, cursorpos):
     '''
     Provide a list of completion candidates for PyUnite* commands
 
@@ -55,37 +101,29 @@ def complete_options(arglead, cmdline, cursorpos):
     Notes:
         For more information, refer to the help for :command-completion-customlist
     '''
-    formatted = fn.flatten(imap(formatted_option, variables.default_options.keys()))
-    return filter(lambda x: arglead in x, formatted)
+    options = fn.flatten(imap(formatted_option, variables.default_options.keys()))
+    return filter(lambda x: arglead in x, options + sources.__all__)
+
+
+def remove_state(state):
+    if state['buffer'].valid:
+        delete_buffer(state['buffer'])
+    variables.states.remove(state)
 
 
 @export()
 def on_window_enter():
-    # If a window was closed, vim.windows will have been updated by now, but
-    # not when 'WinLeave' happens.
-    map(wipe_pyunite_state, ifilter(fn.complement(is_valid_state), variables.states))
-
-    # Close PyUnite window if it's last in tab
-    if len(vim.windows) == 1 and vim.current.buffer.options['filetype'] == 'pyunite':
-        state = find(lambda x: x['buffer'] == vim.current.buffer, variables.states)
-        wipe_pyunite_state(state)
+    # vim.windows haven't been updated yet on 'WinLeave'
+    map(remove_state, ifilter(fn.complement(is_valid_state), variables.states))
 
 
 @export()
 def on_vim_leave_pre():
     with restore(vim.current.window), restore(vim.current.tabpage):
-        for tabpage in vim.tabpages:
+        grouped = fn.group_by(lambda x: x['tabpage_from'], variables.states)
+        for tabpage, states in grouped.items():
             change_tabpage(tabpage)
-            for window in ifilter(lambda x: is_pyunite_buffer(x.buffer), vim.windows):
-                change_window(window)
-                state = state_with_buffer(window.buffer)
-                if state['ephemeral']:
-                    # Close all windows displaying the buffer
-                    delete_buffer()
-                    variables.states.remove(state)
-                else:
-                    # XXX: Save state (cache?)
-                    pass
+            map(remove_state, states)
 
 
 ########################################################
@@ -128,10 +166,6 @@ def source_module(source):
     return module('pyunite.sources.' + source['name'])
 
 
-def is_pyunite_buffer(buff):
-    return buff.options['filetype'] == 'pyunite'
-
-
 def command_output(command):
     vim.command('redir => __command__output__ | silent! ' + command + ' | redir END')
     output = vim.eval('__command__output__')
@@ -142,11 +176,6 @@ def command_output(command):
 def window_with_buffer(buff, windows=None):
     windows = windows if windows else vim.windows
     return find(lambda w: w.buffer == buff, windows)
-
-
-def state_with_buffer(buff, states=None):
-    states = states if states else variables.states
-    return find(lambda x: x['buffer'] == buff, states)
 
 
 def is_valid_state(state):
@@ -187,8 +216,12 @@ def escape_quote(string):
     return "'" + re.sub("'", "''", string) + "'"
 
 
+def escape(char, string):
+    return re.sub(char, '\\' + char, string)
+
+
 def uniq(fun, lst):
-    return map(fn.first, fn.group_by(fun, lst).values())
+    return imap(fn.first, fn.group_by(fun, lst).values())
 
 
 def find(fun, lst):
@@ -228,7 +261,7 @@ def make_window(direction='', vsplit=False, size=0, buffer_name='', autocmd=Fals
         direction,
         str(size) if size > 0 else '',
         'vnew' if vsplit else 'new',
-        buffer_name,
+        escape(' ', buffer_name),
     ))
     return vim.current.window
 
@@ -246,7 +279,7 @@ def quit_window(autocmd=False):
 
 
 def make_buffer(name, autocmd=False):
-    vim.command('silent {} edit {}'.format('' if autocmd else 'noautocmd', name))
+    vim.command('silent {} edit {}'.format('' if autocmd else 'noautocmd', escape(' ', name)))
     return vim.current.buffer
 
 
@@ -254,8 +287,8 @@ def change_buffer(buff, autocmd=False):
     vim.command('silent {} {}buffer'.format('' if autocmd else 'noautocmd', buff.number))
 
 
-def delete_buffer(autocmd=False):
-    vim.command('silent {} bdelete!'.format('' if autocmd else 'noautocmd'))
+def delete_buffer(buff, autocmd=False):
+    vim.command('silent {} bdelete! {}'.format('' if autocmd else 'noautocmd', buff.number))
 
 
 ########################################################
@@ -303,7 +336,7 @@ def validate_source(name):
 
 def parse_options(strings):
     options = [ x + ('' if '=' in x else '=') for x in strings ]
-    return { name : value for name, value in map(parse_option, options) }
+    return dict(imap(parse_option, options))
 
 
 def parse_option(string):
@@ -329,7 +362,7 @@ def formatted_candidates(source):
 
 
 def formatted_source_name(source):
-    return source['name'] + '(' + str(len(source['candidates'])) + ')'
+    return '{} ({})'.format(source['name'], len(source['candidates']))
 
 
 def formatted_source_names(sources):
@@ -393,19 +426,32 @@ def set_buffer_mappings(buff):
 def set_buffer_contents(buff, contents):
     with scoped(buff.options, modifiable=True):
         buff[:] = None
-        buff.append(contents, 0)
+        buff.append(list(contents), 0)
+
+
+def set_buffer_syntax(state):
+    vim.command('syntax clear')
+    for source in state['sources']:
+        source_module(source).set_syntax()
+    vim.command('syntax sync minlines=1 maxlines=1')
+
+
+def make_buffer_name(state):
+    return '{}{} pyunite:{} ({})'.format(
+        '' if state['replace'] else '[NR] ',
+        state['scope'][:3].upper(),
+        str(uniqueid())[:7],
+        total_candidates(state),
+    )
 
 
 def make_pyunite_buffer(state, autocmd=False):
     with restore(vim.current.buffer):
-        buff = make_buffer('{}pyunite:{}'.format(
-            '' if state['replace'] else '[no-repl]:',
-            str(uniqueid())[:7],
-        ))
+        buff = make_buffer(make_buffer_name(state))
     set_buffer_options(buff)
     set_buffer_autocommands(buff)
     set_buffer_mappings(buff)
-    set_buffer_contents(buff, list(all_candidates(state)))
+    set_buffer_contents(buff, all_candidates(state))
     return buff
 
 
@@ -433,8 +479,8 @@ def set_window_options(window):
 def make_pyunite_window(state, autocmd=False):
     window = make_window(
         direction = state['direction'],
-        size = state['size'],
         vsplit = state['vsplit'],
+        size = state['size'],
         buffer_name = state['buffer'].name,
         autocmd = autocmd,
     )
@@ -444,60 +490,7 @@ def make_pyunite_window(state, autocmd=False):
 
 def populate_candidates(state):
     for source in state['sources']:
-        source['candidates'] = source_module(source).gather_candidates()
-
-
-def buffer_logic(state):
-    '''
-    Buffer create/replace/reuse logic. The function name is not very good :(
-
-       new_state    |   old_state   | same sources |     action
-    ----------------|---------------|--------------|-----------------
-        replace     |    replace    |    True      |  reuse buffer
-        replace     |    replace    |    False     |  replace buffer
-        replace     |   no-replace  |    True      |  create buffer (copy candidates)
-        replace     |   no-replace  |    False     |  create buffer
-       no-replace   |    replace    |    True      |  create buffer (copy candidates)
-       no-replace   |    replace    |    False     |  create buffer
-       no-replace   |   no-replace  |    True      |  reuse buffer
-       no-replace   |   no-replace  |    False     |  create buffer
-
-    A reusable buffer will be looked for, then a replacement buffer and as a
-    last resort a new one will be created.
-
-    Returns:
-        old_state (dict): In case a state was reused/replaced it is returned
-        because it will be needed later on to determine wheter the PyUnite
-        window should be resized/moved, etc...
-    '''
-    states = fn.where(variables.states, container=state['container'])
-
-    is_reusable = lambda x: x['replace'] == state['replace'] and same_sources(x, state)
-    reusable = find(is_reusable, states)
-    if reusable:
-        state['buffer'] = reusable['buffer']
-        state['sources'] = reusable['sources']
-        variables.states.remove(reusable)
-        echo('Reused buffer {}'.format(state['buffer']))
-        return reusable
-
-    is_replaceable = lambda x: x['replace'] == state['replace'] == True and not same_sources(x, state)
-    replaceable = find(is_replaceable, states)
-    if replaceable:
-        state['buffer'] = replaceable['buffer']
-        populate_candidates(state)
-        set_buffer_contents(state['buffer'], list(all_candidates(state)))
-        variables.states.remove(replaceable)
-        echo('Replaced buffer {}'.format(state['buffer']))
-        return replaceable
-
-    with_same_sources = find(partial(same_sources, state), states)
-    if with_same_sources:
-        state['sources'] = with_same_sources['sources']
-
-    populate_candidates(state)
-    state['buffer'] = make_pyunite_buffer(state)
-    echo('Created buffer {}'.format(state['buffer']))
+        source['candidates'] = source_module(source).get_candidates(*source['args'])
 
 
 def window_logic(state, old_state):
@@ -523,21 +516,79 @@ def window_logic(state, old_state):
      horizontal  |   horizontal  |      False      |   True    |  close old; create
      horizontal  |   horizontal  |      False      |   False   |  close old; create
     '''
-    if not old_state or not window_with_buffer(old_state['buffer']):
-        return make_pyunite_window(state, autocmd=True)
+    old_window = window_with_buffer(old_state['buffer']) if old_state else None
 
-    old_window = window_with_buffer(old_state['buffer'])
+    if not old_state or not old_window:
+        window = make_pyunite_window(state, autocmd=True)
 
-    if (state['vsplit'] == old_state['vsplit'] and 
-            state['direction'] == old_state['direction']):
+    elif (state['vsplit'], state['direction']) == (old_state['vsplit'], old_state['direction']):
         change_window(old_window, autocmd=True)
-        resize_window(state['size'], vsplit=state['vsplit'])
-        return old_window
+        resize_window(state['size'] or old_state['size'], vsplit=state['vsplit'])
+        window = old_window
 
-    with restore(vim.current.window), scoped(state['buffer'].options, bufhidden='hide'):
+    else:
         change_window(old_window)
-        quit_window()
-    return make_pyunite_window(state, autocmd=True)
+        with restore(vim.current.window), scoped(state['buffer'].options, bufhidden='hide'):
+            quit_window()
+        window = make_pyunite_window(state, autocmd=True)
+
+    state['size'] = window.width if state['vsplit'] else window.height
+    return window
+
+
+def buffer_logic(state):
+    '''
+    Buffer create/replace/reuse logic. The function name is not very good :(
+
+       new_state    |   old_state   | same sources |     action
+    ----------------|---------------|--------------|-----------------
+        replace     |    replace    |    True      |  reuse buffer
+        replace     |    replace    |    False     |  replace buffer
+        replace     |   no-replace  |    True      |  create buffer (copy candidates)
+        replace     |   no-replace  |    False     |  create buffer
+       no-replace   |    replace    |    True      |  create buffer (copy candidates)
+       no-replace   |    replace    |    False     |  create buffer
+       no-replace   |   no-replace  |    True      |  reuse buffer
+       no-replace   |   no-replace  |    False     |  create buffer
+
+    A reusable buffer will be looked for, then a replacement buffer and as a
+    last resort a new one will be created.
+
+    Returns:
+        old_state (dict): In case a state was reused/replaced it is returned
+        because it will be needed later on to compare it with the current
+        state and determine whether the window should be resized/moved, etc...
+    '''
+    # We are only interested in buffers which are in the same container.
+    # That's where the interesting reuse/replace logic is at.
+    states = fn.where(variables.states, container=state['container'])
+
+    is_reusable = lambda x: x['replace'] == state['replace'] and same_sources(x, state)
+    reusable = find(is_reusable, states)
+    if reusable:
+        state['buffer'] = reusable['buffer']
+        state['sources'] = reusable['sources']
+        variables.states.remove(reusable)
+        echo('Reused buffer {}'.format(state['buffer']))
+        return reusable
+
+    is_replaceable = lambda x: x['replace'] == state['replace'] == True and not same_sources(x, state)
+    replaceable = find(is_replaceable, states)
+    if replaceable:
+        state['buffer'] = replaceable['buffer']
+        populate_candidates(state)
+        set_buffer_contents(state['buffer'], all_candidates(state))
+        variables.states.remove(replaceable)
+        echo('Replaced buffer {}'.format(state['buffer']))
+        return replaceable
+
+    with_same_sources = find(partial(same_sources, state), states)
+    if with_same_sources:
+        state['sources'] = with_same_sources['sources']
+    else:
+        populate_candidates(state)
+    state['buffer'] = make_pyunite_buffer(state)
+    echo('Created buffer {}'.format(state['buffer']))
 
 
 def validate_state(state):
@@ -553,12 +604,13 @@ def start_unite(state):
         'global': vim,
         'tabpage': vim.current.tabpage,
         'window': vim.current.window
-    }[state.pop('scope')]
+    }[state['scope']]
     old_state = buffer_logic(state)
     if state['close_on_empty'] and total_candidates(state) == 0:
         return
     saved = vim.current.window
     window = window_logic(state, old_state)
+    set_buffer_syntax(state)
     if not state['focus_on_open']:
         change_window(saved, autocmd=True)
     variables.states.append(state)
