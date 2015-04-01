@@ -1,9 +1,12 @@
 import vim
 import funcy as fn
+from collections import namedtuple
 
 
 # Notice that 'bufhidden' is set to 'wipe' by default. This means that all
 # PyUnite buffers are guaranteed to be displayed in at least one window.
+
+candidate = namedtuple('candidate', 'pre filterable post')(pre='', filterable='', post='')
 
 # Internally maintained list of currently active PyUnite states.
 states = []

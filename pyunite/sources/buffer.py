@@ -1,11 +1,22 @@
 import vim
+import re
 import funcy as fn
+from itertools import ifilter
 
-from ..core import command_output
+from ..core import command_output, icompact
+from ..variables import candidate
 
 
-def get_candidates(*source_args):
-    return fn.compact(command_output('ls').split('\n'))
+def get_candidates(*args):
+    # Example of a candidate
+    # 15 %a   "pyunite/sources/buffer.py"    line 10
+    lines = icompact(command_output('ls').split('\n'))
+    to_candidate = lambda x: candidate._replace(pre=x[0], filterable=x[1])
+    return map(lambda x: to_candidate(re.split('"(.*)"', x)), lines)
+
+
+def get_actionable_part(candidate):
+    return candidate.filterable
 
 
 def set_syntax():

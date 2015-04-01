@@ -3,15 +3,21 @@ import funcy as fn
 from os import devnull, getcwd
 from os.path import expanduser
 from subprocess import Popen, PIPE, check_output
+from itertools import ifilter
 from pathlib import Path
 
-from ..core import command_output
+from ..core import icompact
+from ..variables import candidate
 
 
-import timeit
 def get_candidates(*args):
     cwd = str(Path(expanduser(args[0])).resolve()) if len(args) else getcwd()
-    return Popen(['locate', cwd], stdout=PIPE).communicate()[0].split('\n')
+    lines = icompact(Popen(['locate', cwd], stdout=PIPE).communicate()[0].split('\n'))
+    return map(lambda x: candidate._replace(filterable=x), lines)
+
+
+def get_actionable_part(candidate):
+    return candidate.filterable
 
 
 def set_syntax():

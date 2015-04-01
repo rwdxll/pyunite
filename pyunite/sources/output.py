@@ -1,11 +1,18 @@
 import vim
 import funcy as fn
+from itertools import imap
 
-from ..core import command_output
+from ..core import command_output, icompact
+from ..variables import candidate
 
 
-def get_candidates(*source_args):
-    return fn.compact(command_output(source_args[0]).split('\n'))
+def get_candidates(*args):
+    lines = icompact(command_output(args[0]).split('\n'))
+    return map(lambda x: candidate._replace(filterable=x), lines)
+
+
+def get_actionable_part(candidate):
+    return candidate.filterable
 
 
 def set_syntax():

@@ -26,29 +26,17 @@ from .decorators import export
 #       - default action
 #       - description
 #
-# generic function to set syntax/highlight (with keyword arguments)
-#
-#  add_syntax = partial(add_syntax, 'output')
-#
-#  add_syntax('alex1', '^.*$', nextgroup='alex2')
-#  add_syntax('alex2', '[a-z]', nextgroup='alex3')
-#  add_syntax('alex3', 'w[or]d', nextgroup='alex4')
-#
-#  add_highlight('alex1', 'Comment')
-#  add_highlight('alex2', 'Blah')
-#
-# to allow for custom arguments... maybe have some preprocessor logic going on
-# at the command line? For example if we want to define a mapping for output:
+# to allow custom arguments... maybe have some preprocessor logic going on at
+# the command line? For example if we want to define a mapping for output:
 #
 #  nnoremap <leader>o PyUniteStart output:ls<CR>
 #
 # But then we would have to define a new mapping for every command. Another
 # option is how Unite does it: it has custom code that prompts the user for
 # the input depending on the source. <--- Uggghhh!!
-# How about we get awesome and allow preprocessing directives a la Jinja for
-# example:
+# How about we get awesome and allow preprocessing directives a la shell
 #   
-#   nnoremap <leader>o PyUniteStart output:{%Vim Command: %}
+#   nnoremap <leader>o PyUniteStart output:${ command? }
 #
 # Then PyUnite will automatically prompt the user and the user's input will
 # become an argument for the source. All the other arguments will get parsed
@@ -127,87 +115,6 @@ def on_vim_leave_pre():
 
 
 ########################################################
-# Generic
-########################################################
-
-
-@contextmanager
-def scoped(dictobj, **mappings):
-    saved = { key : dictobj[key] for key in mappings.keys() }
-    for key, val in mappings.items():
-        dictobj[key] = val
-    try:
-        yield
-    finally:
-        for key, val in saved.items():
-            dictobj[key] = val
-
-
-@contextmanager
-def restore(vimobj, autocmd=False):
-    saved = {
-        type(vim.current.tabpage): vim.current.tabpage,
-        type(vim.current.window): vim.current.window,
-        type(vim.current.buffer): vim.current.buffer,
-    }[type(vimobj)]
-    try:
-        yield
-    finally:
-        if saved.valid:
-            change_func = {
-                type(vim.current.tabpage): change_tabpage,
-                type(vim.current.window): change_window,
-                type(vim.current.buffer): change_buffer,
-            }[type(vimobj)]
-            change_func(saved, autocmd)
-
-
-def source_module(source):
-    return module('pyunite.sources.' + source['name'])
-
-
-def command_output(command):
-    vim.command('redir => __command__output__ | silent! ' + command + ' | redir END')
-    output = vim.eval('__command__output__')
-    vim.command('unlet __command__output__')
-    return output
-
-
-def window_with_buffer(buff, windows=None):
-    windows = windows if windows else vim.windows
-    return find(lambda w: w.buffer == buff, windows)
-
-
-def is_valid_state(state):
-    # When a tabpage/window/buffer is closed, its 'valid' attribute becomes
-    # False.  The 'vim' module does not have a 'valid' attribute, but then
-    # again, any state with global scope is valid unless its underlying buffer
-    # has been closed.
-    return state['buffer'].valid and getattr(state['container'], 'valid', True)
-
-
-def total_candidates(state):
-    return sum(imap(lambda x: len(x['candidates']), state['sources']))
-
-
-def all_candidates(state):
-    return fn.iflatten(imap(formatted_candidates, state['sources']))
-
-
-def same_sources(s1, s2):
-    return (fn.pluck('name', s1['sources']) == fn.pluck('name', s2['sources']) and
-            fn.pluck('args', s1['sources']) == fn.pluck('args', s2['sources']))
-
-
-def vhas(option):
-    return bool(int(vim.eval('has("' + option + '")')))
-
-
-def vexists(option):
-    return bool(int(vim.eval('exists("' + option + '")')))
-
-
-########################################################
 # Data
 ########################################################
 
@@ -226,6 +133,17 @@ def uniq(fun, lst):
 
 def find(fun, lst):
     return next(ifilter(fun, lst), None)
+
+
+def flatmap(fun, lst):
+    '''
+    map(fun, lst) should return a list of lists. Then flatten that
+    '''
+    return fn.iflatten(imap(fun, lst))
+
+
+def icompact(lst):
+    return ifilter(lambda x: x, lst)
 
 
 ########################################################
@@ -358,15 +276,8 @@ def validate_option(name, value):
 
 
 def formatted_candidates(source):
-    return imap(lambda x: source['name'] + '  ' + x, source['candidates'])
-
-
-def formatted_source_name(source):
-    return '{} ({})'.format(source['name'], len(source['candidates']))
-
-
-def formatted_source_names(sources):
-    return imap(formatted_source_name, sources)
+    fmt = lambda x: '{} {} {} {}'.format(source['name'], x.pre, x.filterable, x.post)
+    return imap(fmt, source['candidates'])
 
 
 def formatted_option(option):
@@ -379,6 +290,85 @@ def formatted_option(option):
 ########################################################
 # Core
 ########################################################
+
+
+@contextmanager
+def scoped(dictobj, **mappings):
+    saved = { key : dictobj[key] for key in mappings.keys() }
+    for key, val in mappings.items():
+        dictobj[key] = val
+    try:
+        yield
+    finally:
+        for key, val in saved.items():
+            dictobj[key] = val
+
+
+@contextmanager
+def restore(vimobj, autocmd=False):
+    saved = {
+        type(vim.current.tabpage): vim.current.tabpage,
+        type(vim.current.window): vim.current.window,
+        type(vim.current.buffer): vim.current.buffer,
+    }[type(vimobj)]
+    try:
+        yield
+    finally:
+        if saved.valid:
+            change_func = {
+                type(vim.current.tabpage): change_tabpage,
+                type(vim.current.window): change_window,
+                type(vim.current.buffer): change_buffer,
+            }[type(vimobj)]
+            change_func(saved, autocmd)
+
+
+def source_module(source):
+    return module('pyunite.sources.' + source['name'])
+
+
+def command_output(command):
+    vim.command('redir => __command__output__ | silent! ' + command + ' | redir END')
+    output = vim.eval('__command__output__')
+    vim.command('unlet __command__output__')
+    return output
+
+
+def window_with_buffer(buff, windows=None):
+    windows = windows if windows else vim.windows
+    return find(lambda w: w.buffer == buff, windows)
+
+
+def is_valid_state(state):
+    # When a tabpage/window/buffer is closed, its 'valid' attribute becomes
+    # False.  The 'vim' module does not have a 'valid' attribute, but then
+    # again, any state with global scope is valid unless its underlying buffer
+    # has been closed.
+    return state['buffer'].valid and getattr(state['container'], 'valid', True)
+
+
+def candidates_len(state):
+    return sum(imap(lambda x: len(x['candidates']), state['sources']))
+
+
+def filterables(source):
+    '''
+    A filterable is the part of a candidate that can be filtered
+    '''
+    return imap(lambda x: x.filterable, source['candidates'])
+
+
+def same_sources(s1, s2):
+    return (fn.pluck('name', s1['sources']) == fn.pluck('name', s2['sources']) and
+            fn.pluck('args', s1['sources']) == fn.pluck('args', s2['sources']))
+
+
+def vhas(option):
+    return bool(int(vim.eval('has("' + option + '")')))
+
+
+def vexists(option):
+    return bool(int(vim.eval('exists("' + option + '")')))
 
 
 handlers = dict(
@@ -441,7 +431,7 @@ def make_buffer_name(state):
         '' if state['replace'] else '[NR] ',
         state['scope'][:3].upper(),
         str(uniqueid())[:7],
-        total_candidates(state),
+        candidates_len(state),
     )
 
 
@@ -451,7 +441,7 @@ def make_pyunite_buffer(state, autocmd=False):
     set_buffer_options(buff)
     set_buffer_autocommands(buff)
     set_buffer_mappings(buff)
-    set_buffer_contents(buff, all_candidates(state))
+    set_buffer_contents(buff, flatmap(formatted_candidates, state['sources']))
     return buff
 
 
@@ -577,7 +567,7 @@ def buffer_logic(state):
     if replaceable:
         state['buffer'] = replaceable['buffer']
         populate_candidates(state)
-        set_buffer_contents(state['buffer'], all_candidates(state))
+        set_buffer_contents(state['buffer'], flatmap(formatted_candidates, state['sources']))
         variables.states.remove(replaceable)
         echo('Replaced buffer {}'.format(state['buffer']))
         return replaceable
@@ -606,7 +596,7 @@ def start_unite(state):
         'window': vim.current.window
     }[state['scope']]
     old_state = buffer_logic(state)
-    if state['close_on_empty'] and total_candidates(state) == 0:
+    if state['close_on_empty'] and candidates_len(state) == 0:
         return
     saved = vim.current.window
     window = window_logic(state, old_state)
