@@ -1,7 +1,5 @@
 import vim
 import re
-import funcy as fn
-from itertools import ifilter
 
 from ..core import command_output, icompact
 from ..actions import directory_actions

@@ -1,6 +1,8 @@
 import vim
 import funcy as fn
 
+from .pure import *
+
 
 def send_to_cmdline(string):
     # Paste current candidate into the bottom command line
@@ -12,16 +14,16 @@ common_actions = dict(
 )
 
 def tab_open(string):
-	pass
+    pass
 
 def window_open(string):
-	pass
+    pass
 
 def split_open(string):
-	pass
+    pass
 
 def vsplit_open(string):
-	pass
+    pass
 
 openable_actions = fn.merge(common_actions, dict(
     tab_open = tab_open,
@@ -31,17 +33,17 @@ openable_actions = fn.merge(common_actions, dict(
 ))
 
 def read(string):
-	pass
+    pass
 
 def rename(string):
-	pass
+    pass
 
 def remove(string):
-	pass
+    pass
 
 def shell_cmd(string):
     # Run shell command on file
-	pass
+    pass
 
 file_actions = fn.merge(openable_actions, dict(
     read = read,
@@ -51,14 +53,14 @@ file_actions = fn.merge(openable_actions, dict(
 ))
 
 def cd(string):
-	pass
+    pass
 
 def lcd(string):
-	pass
+    pass
 
 def run_pyunite(string):
     # Run PyUnite command with directory as current directory
-	pass
+    pass
 
 directory_actions = fn.merge(file_actions, dict(
     cd = cd,
@@ -67,16 +69,16 @@ directory_actions = fn.merge(file_actions, dict(
 ))
 
 def run_ex(string):
-	pass
+    pass
 
 def buf_rename(string):
-	pass
+    pass
 
 def buf_remove(string):
-	pass
+    pass
 
 def preview(string):
-	pass
+    pass
 
 buffer_actions = fn.merge(directory_actions, dict(
     run_ex = run_ex,

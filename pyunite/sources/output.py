@@ -1,6 +1,4 @@
 import vim
-import funcy as fn
-from itertools import imap
 
 from ..core import command_output, icompact
 from ..actions import common_actions

@@ -1,8 +1,5 @@
-import vim
 import funcy as fn
 from collections import namedtuple
-
-from . import actions
 
 
 # Notice that 'bufhidden' is set to 'wipe' by default. This means that all
@@ -49,6 +46,7 @@ options = dict(
 # This state dictionary contains all the information ever needed to render a
 # PyUnite window. States are buffer-local to PyUnite buffers.
 state = fn.merge(options, dict(
+    uid = '',
     # List of sources
     sources = [],
     # Buffer to which this state belongs to

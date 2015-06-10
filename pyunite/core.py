@@ -1,30 +1,19 @@
 import re
 import vim
-from pathlib import Path
-from copy import deepcopy
-from hashlib import sha256
-from importlib import import_module as module
+from importlib import import_module
 from uuid import uuid4 as uniqueid
 from functools import partial
-from operator import itemgetter as get, methodcaller as call, contains
-from contextlib import contextmanager, nested
+from operator import itemgetter, contains
+from contextlib import contextmanager
 
 from . import variables, sources
 from .decorators import export
+from .pure import *
 from .curried import *
 from .curried import _not
 
 
 # ideas ----------------
-#
-# directory with:
-#   doc.txt
-#   <source_name>.py
-#       - get_candidates()
-#       - actions dictionary. (provide default dictionaries for common groups
-#       of actions)
-#       - default action
-#       - description
 #
 # to allow custom arguments... maybe have some preprocessor logic going on at
 # the command line? For example if we want to define a mapping for output:
@@ -47,52 +36,21 @@ from .curried import _not
 #
 # The args would be ['ls', 'other_opt']. Voila... flexible arguments I'm
 # calling it.
-#
-# TODO: Auto-curry all fn functions
-# TODO: Use type annotations
 
 
 class PyUniteException(Exception):
     pass
 
 
-########################################################
-# Exported
-########################################################
-
-
 @export()
 def start(cmdline):
-    start_unite(merge(variables.state, parse_cmdline(cmdline)))
-
-
-@export()
-def resume(cmdline):
-    start_unite(merge(variables.state, parse_cmdline(cmdline)))
-
-
-@export()
-def close(cmdline):
-    start_unite(merge(variables.state, parse_cmdline(cmdline)))
+    start_unite(merge(variables.state, parse_state(cmdline)))
 
 
 @export()
 def complete_cmdline(arglead, cmdline, cursorpos):
-    '''
-    Provide a list of completion candidates for PyUnite* commands
-
-    Args:
-        arglead (str):    The word prefix being on which to complete upon
-        cmdline (str):    Entire command line after the ':'
-        cursorpos (str):  Cursor position in command line starting from 0. ':' character not counted
-
-    Returns:
-        list of strings: Completion candidates
-
-    Notes:
-        For more information, refer to the help for :command-completion-customlist
-    '''
-    return filter(contains(arglead), format_options() + sources.__all__)
+    # Look at help for :command-completion-customlist
+    return filter(contains(arglead), fmt_options(variables.options.keys()) + sources.__all__)
 
 
 def remove_state(state):
@@ -109,43 +67,40 @@ def on_window_enter():
 @export()
 def on_vim_leave_pre():
     with restore(vim.current.window), restore(vim.current.tabpage):
-        for tabpage, states in groupby(get('tabpage_from'), variables.states).iteritems():
+        for tabpage, states in groupby(itemgetter('tabpage_from'), variables.states).items():
             change_tabpage(tabpage)
             map(remove_state, states)
 
 
-########################################################
-# Data
-########################################################
+@contextmanager
+def scoped(dictobj, **mappings):
+    saved = {key : dictobj[key] for key in mappings.keys()}
+    for key, val in mappings.items():
+        dictobj[key] = val
+    try:
+        yield
+    finally:
+        for key, val in saved.items():
+            dictobj[key] = val
 
 
-def escape_quote(string):
-    return re.sub("'", "''", string)
-
-
-def escape(char, string):
-    return re.sub(char, '\\' + char, string)
-
-
-def iuniq(func, lst):
-    return imap(first, groupby(func, lst).itervalues())
-
-
-def find(func, lst):
-    return first(ifilter(func, lst))
-
-
-def iflatmap(func, lst):
-    return iflatten(imap(func, lst))
-
-
-def icompact(lst):
-    return ifilter(iden, lst)
-
-
-########################################################
-# UI
-########################################################
+@contextmanager
+def restore(vimobj, autocmd=False):
+    saved = {
+        type(vim.current.tabpage): vim.current.tabpage,
+        type(vim.current.window): vim.current.window,
+        type(vim.current.buffer): vim.current.buffer,
+    }[type(vimobj)]
+    try:
+        yield
+    finally:
+        if saved.valid:
+            change_func = {
+                type(vim.current.tabpage): change_tabpage,
+                type(vim.current.window): change_window,
+                type(vim.current.buffer): change_buffer,
+            }[type(vimobj)]
+            change_func(saved, autocmd)
 
 
 @contextmanager
@@ -210,113 +165,16 @@ def delete_buffer(buff, autocmd=False):
     vim.command('silent {} bdelete! {}'.format('' if autocmd else 'noautocmd', buff.number))
 
 
-########################################################
-# Parsers/Formatters
-########################################################
+def vhas(option):
+    return bool(int(vim.eval('has("' + option + '")')))
 
 
-def parse_cmdline(cmdline):
-    '''
-    Parse the string after ':<command>' into a state dictionary
-
-    Args:
-        cmdline (str): The string after ':<command>'
-
-    Returns:
-        dict: Parsed state from command line
-    '''
-    spaces_with_no_backslashes = r'((?<!\\)\s)+'
-    tokens = filter(nequal(' '), re.split(spaces_with_no_backslashes, cmdline))
-    parse_options = imap(compose(validate_option, parse_option))
-    parse_sources = imap(compose(validate_source, parse_source))
-    options = parse_options(ifilter(startswith('-'), tokens))
-    sources = parse_sources(ifilter(_not(startswith('-')), tokens))
-    return merge(dict(options), dict(sources=list(sources)))
-
-
-def parse_source(string):
-    colons_with_no_backslashes = r'(?<!\\):'
-    splits = re.split(colons_with_no_backslashes, string)
-    return merge(variables.source, dict(name=splits[0], args=splits[1:]))
-
-
-def validate_source(source):
-    assert source['name'] in sources.__all__
-    return source
-
-
-def parse_option(string):
-    if '=' not in string:
-        string += '='
-    name, value = re.split('=', string)
-    if value == '':
-        value = False if name.startswith('-no-') else True
-    else:
-        value = silent(eval)(value) or value
-    name = re.sub('-', '_', re.sub('^(-no-|-)', '', name))
-    return variables.option._replace(name=name, value=value)
-
-
-def validate_option(option):
-    assert option.name in variables.options
-    assert type(option.value) == type(variables.options[option.name])
-    return option
-
-
-def formatted_candidates(source):
-    fmt = lambda x: '{} {} {} {}'.format(source['name'], x.pre, x.filterable, x.post)
-    return imap(fmt, source['candidates'])
-
-
-def format_options(options=variables.options.keys()):
-    return iflatten(imap(format_option, options))
-
-
-def format_option(option):
-    if isinstance(variables.options[option], bool):
-        return ['-' + re.sub('_', '-', option), '-no-' + re.sub('_', '-', option)]
-    else:
-        return ['-' + re.sub('_', '-', option) + '=']
-
-
-########################################################
-# Core
-########################################################
-
-
-@contextmanager
-def scoped(dictobj, **mappings):
-    saved = { key : dictobj[key] for key in mappings.keys() }
-    for key, val in mappings.items():
-        dictobj[key] = val
-    try:
-        yield
-    finally:
-        for key, val in saved.items():
-            dictobj[key] = val
-
-
-@contextmanager
-def restore(vimobj, autocmd=False):
-    saved = {
-        type(vim.current.tabpage): vim.current.tabpage,
-        type(vim.current.window): vim.current.window,
-        type(vim.current.buffer): vim.current.buffer,
-    }[type(vimobj)]
-    try:
-        yield
-    finally:
-        if saved.valid:
-            change_func = {
-                type(vim.current.tabpage): change_tabpage,
-                type(vim.current.window): change_window,
-                type(vim.current.buffer): change_buffer,
-            }[type(vimobj)]
-            change_func(saved, autocmd)
+def vexists(option):
+    return bool(int(vim.eval('exists("' + option + '")')))
 
 
 def source_module(source):
-    return module('pyunite.sources.' + source['name'])
+    return import_module('pyunite.sources.' + source['name'])
 
 
 def command_output(command):
@@ -328,32 +186,6 @@ def command_output(command):
 
 def window_with_buffer(buff, windows=None):
     return find(lambda w: w.buffer == buff, windows or vim.windows)
-
-
-def invalid_state(state):
-    # When a tabpage/window/buffer is closed, its 'valid' attribute becomes
-    # False.  The 'vim' module does not have a 'valid' attribute, but then
-    # again, any state with global scope is valid unless its underlying buffer
-    # has been closed.
-    return not state['buffer'].valid or not getattr(state['container'], 'valid', True)
-
-
-def candidates_len(state):
-    return sum(imap(len, imap(get('candidates'), state['sources'])))
-
-
-@curry
-def same_sources(s1, s2):
-    return (pluck('name', s1['sources']) == pluck('name', s2['sources']) and
-            pluck('args', s1['sources']) == pluck('args', s2['sources']))
-
-
-def vhas(option):
-    return bool(int(vim.eval('has("' + option + '")')))
-
-
-def vexists(option):
-    return bool(int(vim.eval('exists("' + option + '")')))
 
 
 handlers = dict(
@@ -375,7 +207,11 @@ def set_buffer_autocommands(buff):
     vim.command('augroup plugin-pyunite')
     vim.command('autocmd! * <buffer={}>'.format(buff.number))
     for event, handler in handlers:
-        vim.command('autocmd {} <buffer={}> call s:{}({})'.format(event, buff.number, handler.func_name))
+        vim.command('autocmd {} <buffer={}> call s:{}()'.format(
+            event,
+            buff.number,
+            handler.func_name,
+        ))
     vim.command('augroup END')
 
 
@@ -416,17 +252,18 @@ def make_buffer_name(state):
         '' if state['replace'] else '[NR] ',
         state['scope'][:3].upper(),
         str(uniqueid())[:7],
-        candidates_len(state),
+        len(list(aggregate_candidates(state))),
     )
 
 
 def make_pyunite_buffer(state, autocmd=False):
     with restore(vim.current.buffer):
         buff = make_buffer(make_buffer_name(state))
+    buff.vars['pyunite_uid'] = state['uid']
     set_buffer_options(buff)
     set_buffer_autocommands(buff)
     set_buffer_mappings(buff)
-    set_buffer_contents(buff, iflatmap(formatted_candidates, state['sources']))
+    set_buffer_contents(buff, aggregate_candidates(state))
     return buff
 
 
@@ -463,9 +300,10 @@ def make_pyunite_window(state, autocmd=False):
     return window
 
 
-def populate_candidates(state):
+def populated_candidates(state):
     for source in state['sources']:
         source['candidates'] = source_module(source).get_candidates(*source['args'])
+    return state['sources']
 
 
 def window_logic(state, old_state):
@@ -538,42 +376,33 @@ def buffer_logic(state):
     # That's where the interesting reuse/replace logic is at.
     states = where(variables.states, container=state['container'])
 
-    is_reusable = lambda x: x['replace'] == state['replace'] and same_sources(x, state)
-    reusable = find(is_reusable, states)
+    old_state = None
+    reusable = first(where(ifilter(same_sources(state), states), replace=state['replace']))
+    replaceable = first(where(ifilter(_not(same_sources(state)), states), replace=True))
+
     if reusable:
-        state['buffer'] = reusable['buffer']
-        state['sources'] = reusable['sources']
+        state.update(subdict(reusable, ['uid', 'buffer', 'sources']))
+        old_state = reusable
         variables.states.remove(reusable)
-        echo('Reused buffer {}'.format(state['buffer']))
-        return reusable
 
-    is_replaceable = lambda x: x['replace'] == state['replace'] == True and not same_sources(x, state)
-    replaceable = find(is_replaceable, states)
-    if replaceable:
-        state['buffer'] = replaceable['buffer']
-        populate_candidates(state)
-        set_buffer_contents(state['buffer'], iflatmap(formatted_candidates, state['sources']))
+    elif replaceable:
+        state.update(subdict(replaceable, ['uid', 'buffer']))
+        state['sources'] = populated_candidates(state)
+        set_buffer_contents(state['buffer'], aggregate_candidates(state))
+        old_state = replaceable
         variables.states.remove(replaceable)
-        echo('Replaced buffer {}'.format(state['buffer']))
-        return replaceable
 
-    with_same_sources = find(same_sources(state), states)
-    if with_same_sources:
-        state['sources'] = with_same_sources['sources']
     else:
-        populate_candidates(state)
-    state['buffer'] = make_pyunite_buffer(state)
-    echo('Created buffer {}'.format(state['buffer']))
+        same = find(same_sources(state), states)
+        state['sources'] = (same and same['sources']) or populated_candidates(state)
+        state['buffer'] = make_pyunite_buffer(state)
 
-
-def validate_state(state):
-    assert len(state['sources'])
-    assert state['scope'] in ['global', 'tabpage', 'window']
-    assert state['direction'] in ['topleft', 'botright', 'leftabove', 'rightbelow']
+    return old_state
 
 
 def start_unite(state):
     validate_state(state)
+    state['uid'] = str(uniqueid())
     state['tabpage_from'] = vim.current.tabpage
     state['window_from'] = vim.current.window
     state['container'] = {
@@ -582,10 +411,10 @@ def start_unite(state):
         'window': vim.current.window
     }[state['scope']]
     old_state = buffer_logic(state)
-    if state['close_on_empty'] and candidates_len(state) == 0:
+    if state['close_on_empty'] and len(list(aggregate_candidates(state))) == 0:
         return
     saved = vim.current.window
-    window = window_logic(state, old_state)
+    window_logic(state, old_state)
     set_buffer_syntax(state)
     if not state['focus_on_open']:
         change_window(saved, autocmd=True)

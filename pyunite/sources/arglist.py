@@ -1,6 +1,5 @@
 import vim
 import re
-import funcy as fn
 
 from ..core import command_output, icompact
 from ..actions import directory_actions
@@ -8,7 +7,7 @@ from ..variables import candidate
 
 
 def get_candidates(*args):
-    lines = icompact(re.split('\s+', command_output('args')))
+    lines = icompact(re.split(r'\s+', command_output('args')))
     return map(lambda x: candidate._replace(filterable=x), lines)
 
 

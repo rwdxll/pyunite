@@ -1,9 +1,7 @@
 import vim
-import funcy as fn
-from os import devnull, getcwd
+from os import getcwd
 from os.path import expanduser
-from subprocess import Popen, PIPE, check_output
-from itertools import ifilter
+from subprocess import Popen, PIPE
 from pathlib import Path
 
 from ..core import icompact

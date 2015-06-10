@@ -1,8 +1,4 @@
 import vim
-import random
-import wrapt
-from functools import wraps
-from funcy import autocurry
 
 
 functions = {}
