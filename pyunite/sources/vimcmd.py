@@ -18,8 +18,9 @@ def actionable_string(action, candidate):
     return candidate.filterable
 
 
-def set_syntax():
-    vim.command('silent! syntax include @Vim syntax/vim.vim')
-    vim.command('syntax match output_source_name /^output/ contained')
-    vim.command('syntax region output oneline keepend start=/^output/ end=/$/ contains=@Vim,output_name')
-    vim.command('highlight default link output_source_name Comment')
+def syntaxes():
+    return ['silent! syntax include @Vim syntax/vim.vim']
+
+
+def highlights():
+    return []

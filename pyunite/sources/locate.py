@@ -23,7 +23,9 @@ def actionable_string(action, candidate):
     return candidate.filterable
 
 
-def set_syntax():
-    vim.command('syntax match locate_source_name /^locate/ contained')
-    vim.command('syntax region locate oneline keepend start=/^locate/ end=/$/ contains=locate_.*')
-    vim.command('highlight default link locate_source_name Comment')
+def syntaxes():
+    return []
+
+
+def highlights():
+    return []

@@ -1,56 +1,31 @@
 import re
 import vim
+import funcy as fn
 from importlib import import_module
 from uuid import uuid4 as uniqueid
+from itertools import ifilter, imap
 from functools import partial
 from operator import itemgetter, contains
 from contextlib import contextmanager
 
 from . import variables, sources
-from .decorators import export
 from .pure import *
-from .curried import *
-from .curried import _not
-
-
-# ideas ----------------
-#
-# to allow custom arguments... maybe have some preprocessor logic going on at
-# the command line? For example if we want to define a mapping for output:
-#
-#  nnoremap <leader>o PyUniteStart output:ls<CR>
-#
-# But then we would have to define a new mapping for every command. Another
-# option is how Unite does it: it has custom code that prompts the user for
-# the input depending on the source. <--- Uggghhh!!
-# How about we get awesome and allow preprocessing directives a la shell
-#   
-#   nnoremap <leader>o PyUniteStart output:${ command? }
-#
-# Then PyUnite will automatically prompt the user and the user's input will
-# become an argument for the source. All the other arguments will get parsed
-# too, so in the following case:
-#
-#   nnoremap <leader>o PyUniteStart output:{%Vim Command: %}:other_opt
-#   >> Vim Command: ls
-#
-# The args would be ['ls', 'other_opt']. Voila... flexible arguments I'm
-# calling it.
-
-
-class PyUniteException(Exception):
-    pass
+from .exceptions import *
+from .decorators import export
 
 
 @export()
 def start(cmdline):
-    start_unite(merge(variables.state, parse_state(cmdline)))
+    ''' Entry point '''
+    with exception_to_vim_errormsg():
+        start_unite(fn.merge(variables.state, parse_state(cmdline)))
 
 
 @export()
 def complete_cmdline(arglead, cmdline, cursorpos):
-    # Look at help for :command-completion-customlist
-    return filter(contains(arglead), fmt_options(variables.options.keys()) + sources.__all__)
+    ''' Look at help for :command-completion-customlist '''
+    sources_and_options = list(fmt_options(variables.options.keys())) + sources.__all__
+    return filter(lambda x: x.startswith(arglead), sources_and_options)
 
 
 def remove_state(state):
@@ -59,21 +34,44 @@ def remove_state(state):
 
 
 @export()
-def on_window_enter():
-    # vim.windows haven't been updated yet on 'WinLeave'
-    compose(map_(remove_state), ifilter(invalid_state))(variables.states)
+def win_enter():
+    ''' Remove invalid states
+    We have to do this on WinEnter because vim.windows hasn't been updated yet
+    on WinLeave
+    '''
+    map(remove_state, ifilter(invalid_state, variables.states))
 
 
 @export()
-def on_vim_leave_pre():
+def vim_leave_pre():
+    ''' Remove all pyunite states in each tabpage '''
     with restore(vim.current.window), restore(vim.current.tabpage):
-        for tabpage, states in groupby(itemgetter('tabpage_from'), variables.states).items():
+        states_by_tab = fn.group_by(itemgetter('tabpage_from'), variables.states)
+        # error(str(dict(states_by_tab)))
+        for tabpage, states in states_by_tab.items():
             change_tabpage(tabpage)
             map(remove_state, states)
 
 
 @contextmanager
+def exception_to_vim_errormsg():
+    try:
+        yield
+    except PyUniteWarning as e:
+        warn(str(e), store=True)
+    except PyUniteError as e:
+        error(str(e), store=True)
+    except AssertionError as e:
+        # It's better to provide a stack trace than nothing
+        if not str(e):
+            raise
+        warn(str(e))
+
+
+@contextmanager
 def scoped(dictobj, **mappings):
+    ''' Change values in a dictionary for the duration of this context. Then
+    restore the old values '''
     saved = {key : dictobj[key] for key in mappings.keys()}
     for key, val in mappings.items():
         dictobj[key] = val
@@ -86,25 +84,24 @@ def scoped(dictobj, **mappings):
 
 @contextmanager
 def restore(vimobj, autocmd=False):
-    saved = {
-        type(vim.current.tabpage): vim.current.tabpage,
-        type(vim.current.window): vim.current.window,
-        type(vim.current.buffer): vim.current.buffer,
+    ''' Restore a vim object (tabpage, window, etc...) after inversion of
+    control is done '''
+    saved = vimobj
+    change_func = {
+        type(vim.current.tabpage): change_tabpage,
+        type(vim.current.window): change_window,
+        type(vim.current.buffer): change_buffer,
     }[type(vimobj)]
     try:
         yield
     finally:
         if saved.valid:
-            change_func = {
-                type(vim.current.tabpage): change_tabpage,
-                type(vim.current.window): change_window,
-                type(vim.current.buffer): change_buffer,
-            }[type(vimobj)]
             change_func(saved, autocmd)
 
 
 @contextmanager
 def highlight(higroup):
+    ''' Set highlight group for the duration of this context '''
     vim.command('echohl ' + higroup)
     try:
         yield
@@ -114,7 +111,13 @@ def highlight(higroup):
 
 def echo(msg, high='Normal', store=False):
     with highlight(high):
-        vim.command(('echon ' if store else 'echom ') + "'" + escape_quote(msg) + "'")
+        if high == 'ErrorMsg':
+            echo_cmd = 'echoe'
+        elif store:
+            echo_cmd = 'echon'
+        else:
+            echo_cmd = 'echom'
+        vim.command(echo_cmd + "'" + escape_quote(msg) + "'")
 
 
 warn = partial(echo, high='WarningMsg')
@@ -217,7 +220,7 @@ def set_buffer_autocommands(buff):
 
 def set_buffer_options(buff):
     buff.options['bufhidden'] = 'wipe'
-    buff.options['buflisted'] = True
+    buff.options['buflisted'] = False
     buff.options['buftype'] = 'nofile'
     buff.options['completefunc'] = ''
     buff.options['omnifunc'] = ''
@@ -240,10 +243,28 @@ def set_buffer_contents(buff, contents):
         buff.append(list(contents), 0)
 
 
+def get_included_syntax_name(syntaxes):
+    ''' Sometimes the user would like to include a syntax file in a syntax
+    command (:h syn-include). '''
+    def get_it(syntax_cmd):
+        return fn.first(re.findall('include (@\w+) ', syntax_cmd))
+    return fn.first(fn.keep(imap(get_it, syntaxes)))
+
+
 def set_buffer_syntax(state):
     vim.command('syntax clear')
     for source in state['sources']:
-        source_module(source).set_syntax()
+        module = source_module(source)
+        included_syntax = get_included_syntax_name(module.syntaxes())
+        what_makes_the_magic_happen = [
+            'syntax match {source}_source_name /^{source}/ contained',
+            'syntax region {source} oneline keepend start=/^{source}/ end=/$/ contains=' + (included_syntax or '') + ',{source}_.*',
+            'highlight default link {source}_source_name Comment',
+        ]
+        map(
+            lambda cmd: vim.command(cmd.format(source=source['name'])),
+            module.syntaxes() + module.highlights() + what_makes_the_magic_happen
+        )
     vim.command('syntax sync minlines=1 maxlines=1')
 
 
@@ -341,6 +362,7 @@ def window_logic(state, old_state):
 
     else:
         change_window(old_window)
+        # If bufhidden=wipe, buffer will dissapear when we close its window
         with restore(vim.current.window), scoped(state['buffer'].options, bufhidden='hide'):
             quit_window()
         window = make_pyunite_window(state, autocmd=True)
@@ -374,26 +396,36 @@ def buffer_logic(state):
     '''
     # We are only interested in buffers which are in the same container.
     # That's where the interesting reuse/replace logic is at.
-    states = where(variables.states, container=state['container'])
+    states = fn.where(variables.states, container=state['container'])
+
+    with_same_sources = partial(same_sources, state)
+
+    reusable_state = fn.first(fn.where(
+        ifilter(with_same_sources, states),
+        replace = state['replace']
+    ))
+
+    replaceable_state = fn.first(fn.where(
+        ifilter(lambda x: not with_same_sources(x), states),
+        replace = True
+    ))
 
     old_state = None
-    reusable = first(where(ifilter(same_sources(state), states), replace=state['replace']))
-    replaceable = first(where(ifilter(_not(same_sources(state)), states), replace=True))
 
-    if reusable:
-        state.update(subdict(reusable, ['uid', 'buffer', 'sources']))
-        old_state = reusable
-        variables.states.remove(reusable)
+    if reusable_state:
+        state.update(fn.project(reusable_state, ['uid', 'buffer', 'sources']))
+        old_state = reusable_state
+        variables.states.remove(reusable_state)
 
-    elif replaceable:
-        state.update(subdict(replaceable, ['uid', 'buffer']))
+    elif replaceable_state:
+        state.update(fn.project(replaceable_state, ['uid', 'buffer']))
         state['sources'] = populated_candidates(state)
         set_buffer_contents(state['buffer'], aggregate_candidates(state))
-        old_state = replaceable
-        variables.states.remove(replaceable)
+        old_state = replaceable_state
+        variables.states.remove(replaceable_state)
 
     else:
-        same = find(same_sources(state), states)
+        same = find(with_same_sources, states)
         state['sources'] = (same and same['sources']) or populated_candidates(state)
         state['buffer'] = make_pyunite_buffer(state)
 

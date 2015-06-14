@@ -1,0 +1,21 @@
+allow custom arguments... maybe have some preprocessor logic going on at
+the command line? For example if we want to define a mapping for output:
+
+ nnoremap <leader>o PyUniteStart output:ls<CR>
+
+But then we would have to define a new mapping for every command. Another
+option is how Unite does it: it has custom code that prompts the user for
+the input depending on the source. <--- Uggghhh!!
+How about we get awesome and allow preprocessing directives a la shell
+  
+  nnoremap <leader>o PyUniteStart output:${ command? }
+
+Then PyUnite will automatically prompt the user and the user's input will
+become an argument for the source. All the other arguments will get parsed
+too, so in the following case:
+
+  nnoremap <leader>o PyUniteStart output:{%Vim Command: %}:other_opt
+  >> Vim Command: ls
+
+The args would be ['ls', 'other_opt']. Voila... flexible arguments I'm
+calling it.
